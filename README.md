@@ -56,7 +56,7 @@ A quick look at how the protocol behaves in practice:
 
 ⬇️ Installation
 
-    git clone https://github.com/your-username/flatcoin
+    git clone https://github.com/Traxler41/flatcoin
     cd flatcoin
     forge install
     forge build
