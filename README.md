@@ -95,7 +95,7 @@ Requirements
 5.  Oracle safety checks
 
 ✍️ Author
-Supravo Sarkar
+`Supravo Sarkar`
 
 💭 Feedback & Contributing
 Have ideas, critiques, or improvements?
@@ -111,5 +111,5 @@ All contributions—technical or conceptual—are welcome.
 MIT License
 
 🧠 Final Note
-This project isn’t just about building a stablecoin—
-it’s about understanding why systems fail, and how to design them not to.
+`This project isn’t just about building a stablecoin—
+it’s about understanding why systems fail, and how to design them not to.`
