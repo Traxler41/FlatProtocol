@@ -1,164 +1,115 @@
 🪙 FlatCoin Protocol
 
-A minimal overcollateralized stablecoin system built with Solidity.
-FlatCoin (FC) is a USD-pegged stablecoin backed by ETH collateral and enforced through a health factor mechanism.
+<p align="center"> <b>Minimal Overcollateralized Stablecoin Engine</b><br/> <sub>ETH-backed • Chainlink-powered • Liquidation-secured</sub> </p> <p align="center"> <img src="https://img.shields.io/badge/Solidity-^0.8.18-1f425f?style=flat-square&logo=solidity"/> <img src="https://img.shields.io/badge/Foundry-Tested-black?style=flat-square"/> <img src="https://img.shields.io/badge/Status-Experimental-ff9800?style=flat-square"/> <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square"/> </p>
 
-📌 Overview
+    “Stablecoins aren’t about stability alone—they’re about enforcing discipline through code.”
 
-FlatCoin is designed to maintain a soft peg of 1 FC ≈ $1 using:
+🌟 Highlights
 
-Overcollateralization (users deposit more value than they mint)
-Real-time price feeds (via Chainlink)
-Liquidation mechanism for undercollateralized positions
+1. 🪙 Overcollateralized Minting — Always backed by more value than issued
+2. ⚖️ Health Factor Enforcement — Keeps positions safe and measurable
+3. 💣 Liquidation Engine — Protects protocol solvency
+4. 🔗 Chainlink Oracles — Reliable ETH/USD pricing
+5. 🛑 Pause Control — Emergency circuit breaker
 
-The system consists of three core components:
+ℹ️ Overview
 
-FlatCoin.sol → ERC20 stablecoin
-FlatCoinEngine.sol → Core protocol logic (minting, staking, liquidation)
-PriceConverter.sol → ETH ↔ USD conversion using Chainlink
-🏗 Architecture
+    FlatCoin is a collateral-backed stablecoin protocol where users deposit ETH and mint a USD-pegged asset (FC).
 
-1. FlatCoin (ERC20 Token)
-   Standard ERC20 token
-   Minting & burning controlled externally
-   Pausable transfers
-   Owned by deployer
+    The system ensures solvency through:
 
-⚠️ Important Note:
-Currently, anyone can mint and burn tokens, which is unsafe for production.
+    Strict collateral ratios
+    Real-time price feeds
+    Automated liquidation of risky positions
 
-2. FlatCoinEngine (Core Logic)
+    This project is designed as a learning + foundational DeFi primitive, inspired by real-world protocols like MakerDAO and Liquity.
 
-Handles:
+🧱 Architecture
 
-Collateral staking (ETH)
-Minting FlatCoin
-Health factor enforcement
-Liquidation of risky positions 3. PriceConverter (Library)
-Fetches ETH/USD price from Chainlink
-Converts ETH amount → USD value
-⚙️ Key Concepts
-🧮 Health Factor (HF)
+    src/
+    ├── FlatCoin.sol          → ERC20 Stablecoin
+    ├── FlatCoinEngine.sol    → Core Logic (Mint / Liquidate)
+    └── PriceConverter.sol    → Oracle Utility (ETH → USD)
 
-The most important safety metric in the protocol.
+⚙️ Core Mechanism
 
-HF = (Collateral Value × Liquidation Threshold) / Debt
-If HF ≥ 1 → Safe
-If HF < 1 → Liquidatable
-📊 Parameters
-Parameter Value Description
-Liquidation Threshold 80% Max borrow limit
-Min Health Factor 1.0 Below this → liquidation
-Mint Threshold 1.2 Required to mint
-Liquidation Bonus 10% Incentive for liquidators
-Protocol Fee 2% Goes to treasury
-🚀 How It Works
+    🧮 Health Factor
+        HF=(Collateral×Threshold)/Debt
 
-1. Deposit Collateral
-   stakeCollateral()
-   Users deposit ETH
-   Stored in s_collateralDeposited
-2. Mint FlatCoin
-   mintCoins(amount)
+    | Condition | Status         |
+    | --------- | -------------- |
+    | HF ≥ 1    | ✅ Safe         |
+    | HF < 1    | ❌ Liquidatable |
 
-Requirements:
+🚀 Usage
 
-Must maintain Health Factor ≥ 1.2 3. Liquidation
-liquidate(user, debtToCover)
+A quick look at how the protocol behaves in practice:
 
-Triggered when:
+    // 1. Deposit ETH
+    engine.stakeCollateral{value: 1 ether}();
 
-User’s HF < 1
+    // 2. Mint FlatCoin
+    engine.mintCoins(100e18);
 
-Process:
+    // 3. Monitor health
+    engine.getHealthFactor(msg.sender);
 
-Liquidator repays user’s debt
-Receives:
-Equivalent collateral
-+10% bonus
-Protocol takes 2% fee
-🔥 Example
-Action Value
-Deposit $120 ETH
-Mint $100 FC
-HF 0.96 (after threshold adjustment)
+⬇️ Installation
 
-➡️ Position becomes liquidatable
+    git clone https://github.com/your-username/flatcoin
+    cd flatcoin
+    forge install
+    forge build
 
-⚠️ Critical Issues (Must Fix)
-❌ 1. Unrestricted Minting/Burning
-function mint(address \_minter, uint256 \_amount) external
-Anyone can mint unlimited tokens
-Breaks entire system
-
-✅ Fix:
-
-modifier onlyEngine() {
-require(msg.sender == address(engine));
-\_;
-}
-❌ 2. Health Factor Bug
-uint256 totalMinted = i_flatCoin.balanceOf(user);
-Uses wallet balance instead of debt
-
-✅ Should be:
-
-uint256 totalMinted = s_tokensMinted[user];
-❌ 3. Liquidation Doesn’t Reduce Debt
-s_tokensMinted[user] is NOT updated
-
-✅ Fix:
-
-s_tokensMinted[user] -= debtToCover;
-❌ 4. No Collateral Withdrawal Logic
-
-Users cannot:
-
-Withdraw ETH
-Close positions
-❌ 5. No Multi-Collateral Support
-
-Only ETH is supported
-(Not scalable for real systems)
-
-🛠 Suggested Improvements
-Restrict mint/burn to Engine
-Add collateral withdrawal
-Add multi-asset collateral (WBTC, LINK)
-Add interest/stability fees
-Add liquidation penalty tuning
-Add oracle safety checks (stale price)
-🔐 Security Features
-Reentrancy protection (ReentrancyGuard)
-Health factor enforcement
-Chainlink price feeds
-Liquidation incentives
-📦 Deployment
 Requirements
-Solidity ^0.8.18
-Chainlink Price Feed (ETH/USD)
-Steps
-Deploy FlatCoin
-Deploy FlatCoinEngine
-Link both contracts
-Set price feed address
-🧪 Future Scope
-DAO governance
-Stability pool
-Cross-chain deployment
-Yield integration
-Peg stabilization mechanisms
-🧠 Inspiration
 
-This protocol is inspired by:
+1. Solidity ^0.8.18
+2. Foundry
+3. Chainlink Price Feed
 
-MakerDAO (DAI)
-Liquity (LUSD)
-Overcollateralized DeFi primitives
-🤝 Contributing
+📊 Protocol Parameters
 
-Feel free to fork, test, and improve the protocol.
+    | Parameter             | Value |
+    | --------------------- | ----- |
+    | Liquidation Threshold | 80%   |
+    | Min Health Factor     | 1.0   |
+    | Mint Threshold        | 1.2   |
+    | Liquidation Bonus     | 10%   |
+    | Protocol Fee          | 2%    |
+
+⚠️ Known Limitations
+
+1. ❌ Mint/Burn not access-controlled
+2. ❌ No collateral withdrawal
+3. ❌ Single collateral (ETH only)
+4. ❌ Debt tracking inconsistency
+
+   ⚡ This is a learning-stage protocol, not production-ready.
+
+🛠 Roadmap
+
+1.  Restrict mint/burn to engine
+2.  Add withdrawal & position closing
+3.  Multi-collateral support
+4.  Stability fee mechanism
+5.  Oracle safety checks
+
+✍️ Author
+Supravo Sarkar
+
+💭 Feedback & Contributing
+Have ideas, critiques, or improvements?
+
+1. Open an issue
+2. Start a discussion
+3. Submit a pull request
+
+All contributions—technical or conceptual—are welcome.
 
 📜 License
 
 MIT License
+
+🧠 Final Note
+This project isn’t just about building a stablecoin—
+it’s about understanding why systems fail, and how to design them not to.
