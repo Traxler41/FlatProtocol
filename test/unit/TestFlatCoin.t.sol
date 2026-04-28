@@ -24,43 +24,22 @@ contract TestFlatCoin is Test {
         assertEq(flatCoin.symbol(), "FC");
     }
 
-    function testPauseToken() public {
-        flatCoin.pause();
-        vm.startPrank(USER);
-        vm.expectRevert();
-        flatCoin.mint(USER, INITIAL_SUPPLY);
-        vm.stopPrank();
-    }
-
-    function testUnpauseToken() public {
-        flatCoin.pause();
-
+    function testAnyoneCannotMintToken() public {
         vm.startPrank(USER);
         vm.expectRevert();
         flatCoin.mint(USER, INITIAL_SUPPLY);
         vm.stopPrank();
 
-        flatCoin.unpause();
-
-        vm.startPrank(USER);
-        flatCoin.mint(USER, INITIAL_SUPPLY);
-        vm.stopPrank();
+        assertEq(flatCoin.balanceOf(USER), 0);
     }
 
-    function testAnyoneCanMintToken() public {
+    function testAnyoneCannotBurnToken() public {
         vm.startPrank(USER);
-        flatCoin.mint(USER, INITIAL_SUPPLY);
-        vm.stopPrank();
-
-        assertEq(flatCoin.balanceOf(USER), INITIAL_SUPPLY);
-    }
-
-    function testAnyoneCanBurnToken() public {
-        vm.startPrank(USER);
+        vm.expectRevert();
         flatCoin.mint(USER, INITIAL_SUPPLY);
         flatCoin.burn(USER, BURN_AMOUNT);
         vm.stopPrank();
 
-        assertEq(flatCoin.balanceOf(USER), (INITIAL_SUPPLY - BURN_AMOUNT));
+        assertEq(flatCoin.balanceOf(USER), 0);
     }
 }

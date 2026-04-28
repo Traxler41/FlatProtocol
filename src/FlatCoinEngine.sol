@@ -3,131 +3,265 @@ pragma solidity ^0.8.18;
 
 import {FlatCoin} from "./FlatCoin.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
-import {PriceConverter} from "./PriceConverter.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 contract FlatCoinEngine is Ownable, ReentrancyGuard {
-    using PriceConverter for uint256;
+    /*//////////////////////////////////////////////////////////////
+                            STRUCTS
+    //////////////////////////////////////////////////////////////*/
 
-    /* Types & Constants */
-    uint256 private constant LIQUIDATION_THRESHOLD = 80; // 80% collateralized
-    uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
-    uint256 private constant LIQUIDATION_BONUS = 10; // 10% bonus for liquidators
+    struct CollateralConfig {
+        address priceFeed;
+        uint256 liquidationThreshold; // e.g. 80
+        uint256 liquidationBonus; // e.g. 10
+        bool enabled;
+    }
+
+    struct UserPosition {
+        uint256 debt;
+        uint256 lastUpdated;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            CONSTANTS
+    //////////////////////////////////////////////////////////////*/
+
     uint256 private constant PRECISION = 1e18;
-    uint256 private constant PROTOCOL_FEE = 2;
-    uint256 private constant MINT_HEALTH_FACTOR_THRESHOLD = 12e17; // 1.2 in 18-decimal precision
+    uint256 private constant LIQ_PRECISION = 100;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+    uint256 private constant ORACLE_TIMEOUT = 3 hours;
 
-    address private s_treasury;
+    uint256 private constant STABILITY_FEE = 5e16; // 5% APR scaled
 
-    /* State Variables */
+    /*//////////////////////////////////////////////////////////////
+                            STORAGE
+    //////////////////////////////////////////////////////////////*/
+
     FlatCoin private immutable i_flatCoin;
-    AggregatorV3Interface private immutable i_priceFeed;
-    mapping(address => uint256) private s_collateralDeposited;
-    mapping(address => uint256) s_tokensMinted;
+    address private immutable i_treasury;
 
-    /* Events & Errors */
-    event CollateralDeposited(address indexed user, uint256 amount);
-    event TokensMinted(address indexed user, uint256 amount);
-    event Liquidation(
-        address indexed liquidator, address indexed staker, uint256 amountRepaid, uint256 collateralTaken
-    );
+    address[] private s_tokens;
 
-    error FlatCoinEngine__NeedsMoreThanZero();
-    error FlatCoinEngine__BreaksHealthFactor(uint256 healthFactor);
-    error FlatCoinEngine__HealthFactorOk();
-    error FlatCoinEngine__HealthFactorNotImproved();
-    error FlatCoinEngine__TransferFailed();
-    error FlatCoinEngine__BelowSafetyBarrier(uint256 healthFactor);
+    mapping(address => CollateralConfig) private s_config;
+    mapping(address => mapping(address => uint256)) private s_collateral;
+    mapping(address => UserPosition) private s_positions;
 
-    /* Modifiers */
-    modifier moreThanZero(uint256 amount) {
-        if (amount == 0) revert FlatCoinEngine__NeedsMoreThanZero();
-        _;
+    mapping(address => uint256) private s_protocolFees;
+
+    /*//////////////////////////////////////////////////////////////
+                            EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event CollateralDeposited(address user, address token, uint256 amount);
+    event CollateralWithdrawn(address user, address token, uint256 amount);
+    event Minted(address user, uint256 amount);
+    event Burned(address user, uint256 amount);
+    event Liquidated(address liquidator, address user, address token, uint256 debtCovered);
+
+    /*//////////////////////////////////////////////////////////////
+                            ERRORS
+    //////////////////////////////////////////////////////////////*/
+
+    error InvalidAmount();
+    error TokenNotSupported();
+    error TransferFailed();
+    error BreaksHealthFactor(uint256 hf);
+    error HealthFactorOk();
+    error OracleFailure();
+    error NotEnoughCollateral();
+
+    /*//////////////////////////////////////////////////////////////
+                            CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    constructor(address flatCoin, address treasury) Ownable(msg.sender) {
+        i_flatCoin = FlatCoin(flatCoin);
+        i_treasury = treasury;
     }
 
-    constructor(address priceFeed, address flatCoinAddress) Ownable(msg.sender) {
-        i_priceFeed = AggregatorV3Interface(priceFeed);
-        i_flatCoin = FlatCoin(flatCoinAddress);
-        s_treasury = msg.sender;
+    /*//////////////////////////////////////////////////////////////
+                        ADMIN CONFIG
+    //////////////////////////////////////////////////////////////*/
+
+    function addCollateral(address token, address priceFeed, uint256 liqThreshold, uint256 liqBonus)
+        external
+        onlyOwner
+    {
+        s_config[token] = CollateralConfig(priceFeed, liqThreshold, liqBonus, true);
+        s_tokens.push(token);
     }
 
-    /* External Functions */
+    /*//////////////////////////////////////////////////////////////
+                        USER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
-    function stakeCollateral() public payable moreThanZero(msg.value) {
-        s_collateralDeposited[msg.sender] += msg.value;
-        emit CollateralDeposited(msg.sender, msg.value);
+    function deposit(address token, uint256 amount) external nonReentrant {
+        if (amount == 0) revert InvalidAmount();
+        if (!s_config[token].enabled) revert TokenNotSupported();
+
+        s_collateral[msg.sender][token] += amount;
+
+        emit CollateralDeposited(msg.sender, token, amount);
+
+        bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
+        if (!success) revert TransferFailed();
     }
 
-    function mintCoins(uint256 amountToMint) public moreThanZero(amountToMint) nonReentrant {
-        s_tokensMinted[msg.sender] += amountToMint;
-        i_flatCoin.mint(msg.sender, amountToMint);
+    function mint(uint256 amount) external nonReentrant {
+        if (amount == 0) revert InvalidAmount();
 
-        uint256 hp = getHealthFactor(msg.sender);
-        if (hp < MINT_HEALTH_FACTOR_THRESHOLD) {
-            revert FlatCoinEngine__BelowSafetyBarrier(hp);
+        _accrueInterest(msg.sender);
+
+        uint256 newDebt = s_positions[msg.sender].debt + amount;
+
+        if (_healthFactor(msg.sender, newDebt) < MIN_HEALTH_FACTOR) {
+            revert BreaksHealthFactor(_healthFactor(msg.sender, newDebt));
         }
-        _revertIfHealthFactorIsBroken(msg.sender);
-        emit TokensMinted(msg.sender, amountToMint);
+
+        s_positions[msg.sender].debt = newDebt;
+
+        i_flatCoin.mint(msg.sender, amount);
+
+        emit Minted(msg.sender, amount);
     }
 
-    /**
-     * @param user The undercollateralized user to liquidate
-     * @param debtToCover The amount of FlatCoin the liquidator wants to burn
-     */
-    function liquidate(address user, uint256 debtToCover) external moreThanZero(debtToCover) nonReentrant {
-        uint256 startingHealthFactor = getHealthFactor(user);
-        if (startingHealthFactor >= MIN_HEALTH_FACTOR) revert FlatCoinEngine__HealthFactorOk();
+    function burn(uint256 amount) external nonReentrant {
+        _accrueInterest(msg.sender);
 
-        // 1. Calculate how much ETH the debt is worth
-        uint256 ethPrice = PriceConverter.getPrice(i_priceFeed);
-        // (Debt / Price)
-        uint256 collateralBase = (debtToCover * PRECISION) / ethPrice;
+        s_positions[msg.sender].debt -= amount;
 
-        // 2. Calculate Bonus (10%) and Fee (2%)
-        uint256 liquidatorBonus = (collateralBase * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
-        uint256 protocolFeeAmount = (collateralBase * PROTOCOL_FEE) / LIQUIDATION_PRECISION;
-        uint256 totalCollateralToTake = collateralBase + liquidatorBonus + protocolFeeAmount;
+        bool success = i_flatCoin.transferFrom(msg.sender, address(this), amount);
+        if (!success) revert TransferFailed();
 
-        // 3. State Updates
-        s_collateralDeposited[user] -= totalCollateralToTake;
-        s_collateralDeposited[msg.sender] += (collateralBase + liquidatorBonus);
-        s_collateralDeposited[s_treasury] += protocolFeeAmount;
+        i_flatCoin.burn(address(this), amount);
 
-        // 4. THE CRITICAL STEP: Burn the Debt
-        // Move tokens from liquidator to the engine and burn them
+        emit Burned(msg.sender, amount);
+    }
+
+    function withdraw(address token, uint256 amount) external nonReentrant {
+        if (s_collateral[msg.sender][token] < amount) revert NotEnoughCollateral();
+
+        s_collateral[msg.sender][token] -= amount;
+
+        if (_healthFactor(msg.sender, s_positions[msg.sender].debt) < MIN_HEALTH_FACTOR) {
+            revert BreaksHealthFactor(_healthFactor(msg.sender, s_positions[msg.sender].debt));
+        }
+
+        emit CollateralWithdrawn(msg.sender, token, amount);
+
+        bool success = IERC20(token).transfer(msg.sender, amount);
+        if (!success) revert TransferFailed();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        LIQUIDATION
+    //////////////////////////////////////////////////////////////*/
+
+    function liquidate(address user, address token, uint256 debtToCover) external nonReentrant {
+        _accrueInterest(user);
+
+        if (_healthFactor(user, s_positions[user].debt) >= MIN_HEALTH_FACTOR) {
+            revert HealthFactorOk();
+        }
+
+        CollateralConfig memory cfg = s_config[token];
+
+        uint256 price = _getPrice(cfg.priceFeed);
+
+        uint256 collateralValue = (debtToCover * PRECISION) / price;
+
+        uint256 bonus = (collateralValue * cfg.liquidationBonus) / LIQ_PRECISION;
+
+        uint256 totalSeize = collateralValue + bonus;
+
+        if (totalSeize > s_collateral[user][token]) {
+            totalSeize = s_collateral[user][token];
+        }
+
+        s_collateral[user][token] -= totalSeize;
+        s_positions[user].debt -= debtToCover;
+
+        s_collateral[msg.sender][token] += totalSeize;
+
         bool success = i_flatCoin.transferFrom(msg.sender, address(this), debtToCover);
-        if (!success) revert FlatCoinEngine__TransferFailed();
+        if (!success) revert TransferFailed();
+
         i_flatCoin.burn(address(this), debtToCover);
 
-        // 5. Final check: HF must improve!
-        uint256 endingHealthFactor = getHealthFactor(user);
-        if (endingHealthFactor <= startingHealthFactor) revert FlatCoinEngine__HealthFactorNotImproved();
+        emit Liquidated(msg.sender, user, token, debtToCover);
     }
 
-    /* Private & View Functions */
+    /*//////////////////////////////////////////////////////////////
+                        INTEREST LOGIC
+    //////////////////////////////////////////////////////////////*/
 
-    function getHealthFactor(address user) public view returns (uint256) {
-        uint256 totalMinted = i_flatCoin.balanceOf(user);
-        if (totalMinted == 0) return type(uint256).max;
+    function _accrueInterest(address user) internal {
+        UserPosition storage pos = s_positions[user];
 
-        uint256 collateralValueInUsd = getCollateralValueInUsd(user);
-        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        if (pos.debt == 0) {
+            pos.lastUpdated = block.timestamp;
+            return;
+        }
 
-        return (collateralAdjustedForThreshold * PRECISION) / totalMinted;
+        uint256 timeElapsed = block.timestamp - pos.lastUpdated;
+
+        uint256 interest = (pos.debt * STABILITY_FEE * timeElapsed) / (365 days * PRECISION);
+
+        pos.debt += interest;
+        s_protocolFees[address(i_flatCoin)] += interest;
+
+        pos.lastUpdated = block.timestamp;
     }
 
-    function getCollateralValueInUsd(address user) public view returns (uint256) {
-        return s_collateralDeposited[user].getConversionRate(i_priceFeed);
+    /*//////////////////////////////////////////////////////////////
+                        VIEW FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function _healthFactor(address user, uint256 debt) internal view returns (uint256) {
+        if (debt == 0) return type(uint256).max;
+
+        uint256 totalCollateralUsd;
+
+        for (uint256 i = 0; i < s_tokens.length; i++) {
+            address token = s_tokens[i];
+            uint256 amount = s_collateral[user][token];
+
+            if (amount == 0) continue;
+
+            CollateralConfig memory cfg = s_config[token];
+
+            uint256 price = _getPrice(cfg.priceFeed);
+
+            uint256 value = (amount * price) / PRECISION;
+
+            uint256 adjusted = (value * cfg.liquidationThreshold) / LIQ_PRECISION;
+
+            totalCollateralUsd += adjusted;
+        }
+
+        return (totalCollateralUsd * PRECISION) / debt;
     }
 
-    function _revertIfHealthFactorIsBroken(address user) internal view {
-        uint256 healthFactor = getHealthFactor(user);
-        if (healthFactor < MIN_HEALTH_FACTOR) revert FlatCoinEngine__BreaksHealthFactor(healthFactor);
+    function _getPrice(address feed) internal view returns (uint256) {
+        (, int256 answer,, uint256 updatedAt,) = AggregatorV3Interface(feed).latestRoundData();
+
+        if (answer <= 0) revert OracleFailure();
+        if (block.timestamp - updatedAt > ORACLE_TIMEOUT) revert OracleFailure();
+
+        return uint256(answer) * 1e10;
     }
 
-    function getCollateralStaked(address user) external view returns (uint256) {
-        return s_collateralDeposited[user];
+    function getHealthFactor(address user) external view returns (uint256) {
+        return _healthFactor(user, s_positions[user].debt);
+    }
+
+    function getDebt(address user) external view returns (uint256) {
+        return s_positions[user].debt;
+    }
+
+    function getCollateral(address user, address token) external view returns (uint256) {
+        return s_collateral[user][token];
     }
 }

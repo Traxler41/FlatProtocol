@@ -1,4 +1,4 @@
-//SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -6,57 +6,99 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 contract FlatCoin is ERC20, Ownable, Pausable {
-    address immutable i_owner;
+    /*//////////////////////////////////////////////////////////////
+                                STORAGE
+    //////////////////////////////////////////////////////////////*/
 
-    mapping(address => uint256) s_tokenHolders;
+    address private s_engine;
 
-    constructor() ERC20("FlatCoin", "FC") Ownable(msg.sender) {
-        i_owner = msg.sender;
+    /*//////////////////////////////////////////////////////////////
+                                EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event EngineUpdated(address indexed newEngine);
+
+    /*//////////////////////////////////////////////////////////////
+                                ERRORS
+    //////////////////////////////////////////////////////////////*/
+
+    error FlatCoin__NotEngine();
+    error FlatCoin__ZeroAddress();
+
+    /*//////////////////////////////////////////////////////////////
+                                MODIFIERS
+    //////////////////////////////////////////////////////////////*/
+
+    modifier onlyEngine() {
+        if (msg.sender != s_engine) revert FlatCoin__NotEngine();
+        _;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    constructor() ERC20("FlatCoin", "FC") Ownable(msg.sender) {}
+
+    /*//////////////////////////////////////////////////////////////
+                        ENGINE CONFIGURATION
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Sets the engine contract that controls mint/burn
+     * @dev Can only be set once or updated by owner (governance)
+     */
+    function setEngine(address engine) external onlyOwner {
+        if (engine == address(0)) revert FlatCoin__ZeroAddress();
+
+        s_engine = engine;
+        emit EngineUpdated(engine);
+    }
+
+    function getEngine() external view returns (address) {
+        return s_engine;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            CORE LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Mint new FlatCoins
+     * @dev Only callable by engine
+     */
+    function mint(address to, uint256 amount) external onlyEngine whenNotPaused {
+        _mint(to, amount);
     }
 
     /**
-     *
-     * @param _minter Address that wants to mint FlatCoin
-     * @param _amount Amount of FlatCoin to be minted
+     * @notice Burn FlatCoins
+     * @dev Only callable by engine
      */
-    function mint(address _minter, uint256 _amount) external whenNotPaused {
-        _mint(_minter, _amount);
+    function burn(address from, uint256 amount) external onlyEngine whenNotPaused {
+        _burn(from, amount);
     }
 
-    /**
-     *
-     * @param _burner Address that wants to burn FlatCoin
-     * @param _amount Amount of FlatCoin to be burnt
-     */
-    function burn(address _burner, uint256 _amount) external {
-        _burn(_burner, _amount);
-    }
+    /*//////////////////////////////////////////////////////////////
+                        EMERGENCY CONTROLS
+    //////////////////////////////////////////////////////////////*/
 
-    function pause() public onlyOwner {
+    function pause() external onlyOwner {
         _pause();
     }
 
-    function unpause() public onlyOwner {
+    function unpause() external onlyOwner {
         _unpause();
     }
 
-    function _update(address from, address to, uint256 value) internal override(ERC20) whenNotPaused {
-        super._update(from, to, value);
-    }
-
-    function getAddress() public view returns (address) {
-        return address(this);
-    }
-
-    function getOwner() public view returns (address) {
-        return i_owner;
-    }
+    /*//////////////////////////////////////////////////////////////
+                        INTERNAL OVERRIDES
+    //////////////////////////////////////////////////////////////*/
 
     /**
-     *
-     * @param _staker Address of staker
+     * @dev Prevent transfers when paused
      */
-    function getTokenHolderAmount(address _staker) public view returns (uint256) {
-        return s_tokenHolders[_staker];
+    function _update(address from, address to, uint256 value) internal override whenNotPaused {
+        super._update(from, to, value);
     }
 }

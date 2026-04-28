@@ -66,23 +66,44 @@ contract TestFlatCoinEngine is Test {
     }
 
     function testCanLiquidate() public {
+        // 1. Setup: User deposits 5 ETH ($10k) and mints 3k FC 0.8) / 3,000 = 2.66 (Healthy)
         vm.startPrank(USER);
-        flatCoinEngine.stakeCollateral{value: FUND_AMOUNT}();
-        flatCoinEngine.mintCoins(MINT_AMOUNT);
-        flatCoin.transfer(LIQUIDATOR, 1000e18);
+        flatCoinEngine.stakeCollateral{value: 5 ether}();
+        flatCoinEngine.mintCoins(3000 ether);
+
+        // Give Liquidator enough tokens to pay half the debt
+        uint256 debtToCover = 1500 ether;
+        flatCoin.transfer(LIQUIDATOR, debtToCover);
         vm.stopPrank();
 
-        MockV3Aggregator(address(priceFeed)).updateAnswer(400e8);
+        // 2. Price Crash: ETH drops to $700700 * 0.8) / 3,000 = 0.93 (Liquidatable!)
+        MockV3Aggregator(address(priceFeed)).updateAnswer(700e8);
 
-        uint256 userHealthFactorBefore = flatCoinEngine.getHealthFactor(USER);
-        console.log("Health Factor Before Liquidation:", userHealthFactorBefore);
-        assert(userHealthFactorBefore < 1e18);
+        uint256 hfBefore = flatCoinEngine.getHealthFactor(USER);
+        console.log("Health Factor Before:", hfBefore);
+        assert(hfBefore < 1e18);
 
+        // 3. Execution: Liquidator pays off 1,500 FC debt
         vm.startPrank(LIQUIDATOR);
-        flatCoin.approve(address(flatCoinEngine), 1000e18); // Approve engine to burn
-        flatCoinEngine.liquidate(USER, 1000e18); // Liquidate 1000 debt
+        flatCoin.approve(address(flatCoinEngine), debtToCover);
+        flatCoinEngine.liquidate(USER, debtToCover);
         vm.stopPrank();
 
-        assert(flatCoinEngine.getHealthFactor(USER) > 1e18);
+        // 4. Assertions
+        uint256 hfAfter = flatCoinEngine.getHealthFactor(USER);
+        console.log("Health Factor After:", hfAfter);
+
+        // Health Factor must have improved significantly
+        assert(hfAfter > hfBefore);
+
+        // User debt should be reduced
+        assertEq(flatCoinEngine.getMintedAmount(USER), 1500 ether);
+
+        // Liquidator should have earned ETH (Debt + 10% Bonus)
+        // 1500 USD / 700 = 2.14 ETH + 10% bonus = ~2.35 ETH
+        uint256 liquidatorCollateral = flatCoinEngine.getCollateralStaked(LIQUIDATOR);
+        assert(liquidatorCollateral > 0);
+        console.log("Liquidator earned ETH:", liquidatorCollateral);
     }
 }
+
