@@ -1,115 +1,201 @@
-🪙 FlatCoin Protocol
+# 🪙 FlatCoin Protocol
 
-<p align="center"> <b>Minimal Overcollateralized Stablecoin Engine</b><br/> <sub>ETH-backed • Chainlink-powered • Liquidation-secured</sub> </p> <p align="center"> <img src="https://img.shields.io/badge/Solidity-^0.8.18-1f425f?style=flat-square&logo=solidity"/> <img src="https://img.shields.io/badge/Foundry-Tested-black?style=flat-square"/> <img src="https://img.shields.io/badge/Status-Experimental-ff9800?style=flat-square"/> <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square"/> </p>
+<p align="center">
+  <b>Overcollateralized Stablecoin Engine</b><br/>
+  <sub>Multi-Collateral • Chainlink Oracles • Liquidation-secured</sub>
+</p>
 
-    “Stablecoins aren’t about stability alone—they’re about enforcing discipline through code.”
+<p align="center">
+  <img src="https://img.shields.io/badge/Solidity-^0.8.18-1f425f?style=flat-square&logo=solidity"/>
+  <img src="https://img.shields.io/badge/Foundry-Tested-black?style=flat-square"/>
+  <img src="https://img.shields.io/badge/Architecture-Modular-6c5ce7?style=flat-square"/>
+  <img src="https://img.shields.io/badge/Status-Prototype-ff9800?style=flat-square"/>
+  <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square"/>
+</p>
 
-🌟 Highlights
+<p align="center">
+  <i>“Stablecoins aren’t about stability alone—they’re about enforcing discipline through code.”</i>
+</p>
 
-1. 🪙 Overcollateralized Minting — Always backed by more value than issued
-2. ⚖️ Health Factor Enforcement — Keeps positions safe and measurable
-3. 💣 Liquidation Engine — Protects protocol solvency
-4. 🔗 Chainlink Oracles — Reliable ETH/USD pricing
-5. 🛑 Pause Control — Emergency circuit breaker
+---
 
-ℹ️ Overview
+## 🌟 Highlights
 
-    FlatCoin is a collateral-backed stablecoin protocol where users deposit ETH and mint a USD-pegged asset (FC).
+- 🪙 **Overcollateralized Minting** — Always backed by excess collateral
+- ⚖️ **Health Factor Enforcement** — Continuous solvency monitoring
+- 💣 **Liquidation Engine** — Incentivized third-party liquidations
+- 🔗 **Chainlink Oracles** — Reliable, decentralized price feeds
+- 🛑 **Pause Mechanism** — Emergency circuit breaker
+- 🧱 **Modular Architecture** — Engine + Token separation
+- 🧪 **Tested with Foundry** — Unit + Integration coverage
+- 🚀 **Deployment Ready** — Scripts for local + Sepolia + Mainnet
 
-    The system ensures solvency through:
+---
 
-    Strict collateral ratios
-    Real-time price feeds
-    Automated liquidation of risky positions
+## ℹ️ Overview
 
-    This project is designed as a learning + foundational DeFi primitive, inspired by real-world protocols like MakerDAO and Liquity.
+**FlatCoin** is a decentralized, overcollateralized stablecoin protocol where users:
 
-🧱 Architecture
+1. Deposit collateral (e.g., ETH, WBTC)
+2. Mint a USD-pegged asset (**FC**)
+3. Maintain a safe collateral ratio to avoid liquidation
+
+The system maintains solvency through:
+
+- Strict collateralization thresholds
+- Real-time oracle pricing
+- Automated liquidation of undercollateralized positions
+
+Inspired by systems like MakerDAO and Liquity, FlatCoin focuses on **clarity, modularity, and risk enforcement**.
+
+---
+
+## 🧱 Architecture
 
     src/
-    ├── FlatCoin.sol          → ERC20 Stablecoin
-    ├── FlatCoinEngine.sol    → Core Logic (Mint / Liquidate)
-    └── PriceConverter.sol    → Oracle Utility (ETH → USD)
 
-⚙️ Core Mechanism
+├── FlatCoin.sol → ERC20 Stablecoin (Engine-controlled)
+├── FlatCoinEngine.sol → Core Protocol Logic
+└── PriceConverter.sol → Oracle Utilities
 
-    🧮 Health Factor
-        HF=(Collateral×Threshold)/Debt
+### 🔑 Design Principles
 
-    | Condition | Status         |
-    | --------- | -------------- |
-    | HF ≥ 1    | ✅ Safe         |
-    | HF < 1    | ❌ Liquidatable |
+- **Separation of Concerns**
+  - Token ≠ Logic
+- **Protocol-Enforced Safety**
+  - No trust assumptions
+- **Composable Structure**
+  - Extendable to multi-collateral + fees
 
-🚀 Usage
+---
 
-A quick look at how the protocol behaves in practice:
+## ⚙️ Core Mechanism
 
-    // 1. Deposit ETH
-    engine.stakeCollateral{value: 1 ether}();
+### 🧮 Health Factor
 
-    // 2. Mint FlatCoin
-    engine.mintCoins(100e18);
+    HF = (Collateral Value × Liquidation Threshold) / Debt
 
-    // 3. Monitor health
-    engine.getHealthFactor(msg.sender);
+| Condition | Status          |
+| --------- | --------------- |
+| HF ≥ 1    | ✅ Safe         |
+| HF < 1    | ❌ Liquidatable |
 
-⬇️ Installation
+---
 
-    git clone https://github.com/Traxler41/flatcoin
-    cd flatcoin
-    forge install
-    forge build
+## 🔁 Protocol Flow
 
-Requirements
+```solidity
+// 1. Deposit Collateral
+engine.deposit(token, amount);
 
-1. Solidity ^0.8.18
-2. Foundry
-3. Chainlink Price Feed
+// 2. Mint Stablecoin
+engine.mint(amount);
+
+// 3. Monitor Position
+engine.getHealthFactor(user);
+
+// 4. Burn to reduce debt
+engine.burn(amount);
+
+// 5. Withdraw collateral
+engine.withdraw(token, amount);
+```
+
+🧪 Testing
+
+FlatCoin uses Foundry for high-performance testing.
+
+Test Coverage Includes:
+✅ Collateral deposit / withdrawal
+✅ Minting constraints & health factor
+✅ Liquidation flows
+✅ Multi-user interactions
+✅ Interest / time-based scenarios
+
+    forge test -vv
+
+🚀 Deployment
+Local (Anvil)
+make anvil
+make deploy-local
+
+Sepolia
+make deploy-sepolia
+
+Interact (Live Network)
+make interact-sepolia
+
+⚙️ Configuration
+
+Environment variables (.env):
+
+    SEPOLIA_RPC_URL=...
+    MAINNET_RPC_URL=...
+    PRIVATE_KEY=...
+    ETHERSCAN_API_KEY=...
 
 📊 Protocol Parameters
+| Parameter | Value |
+| --------------------- | ----- |
+| Liquidation Threshold | 80% |
+| Min Health Factor | 1.0 |
+| Mint Threshold | 1.2 |
+| Liquidation Bonus | 10% |
+| Protocol Fee | 2% |
 
-    | Parameter             | Value |
-    | --------------------- | ----- |
-    | Liquidation Threshold | 80%   |
-    | Min Health Factor     | 1.0   |
-    | Mint Threshold        | 1.2   |
-    | Liquidation Bonus     | 10%   |
-    | Protocol Fee          | 2%    |
+⚠️ Risks & Considerations 1. Oracle dependency (Chainlink) 2. Extreme volatility → liquidation cascades 3. No stability fee yet (no peg pressure control) 4. Prototype-level economic design
 
-⚠️ Known Limitations
-
-1. ❌ Mint/Burn not access-controlled
-2. ❌ No collateral withdrawal
-3. ❌ Single collateral (ETH only)
-4. ❌ Debt tracking inconsistency
-
-   ⚡ This is a learning-stage protocol, not production-ready.
+⚡ This is a research & prototype system, not production-ready.
 
 🛠 Roadmap
 
-1.  Restrict mint/burn to engine
-2.  Add withdrawal & position closing
-3.  Multi-collateral support
-4.  Stability fee mechanism
-5.  Oracle safety checks
+🔒 Short Term
+Engine-controlled mint/burn
+Collateral withdrawal logic
+Multi-collateral support
+Liquidation incentives
 
-✍️ Author
-`Supravo Sarkar`
+🚧 Mid Term
+Stability fee / interest model
+Oracle fallback / circuit breakers
+Peg stability mechanisms
+Frontend dashboard
 
-💭 Feedback & Contributing
-Have ideas, critiques, or improvements?
+🧠 Advanced
+Cross-chain collateral
+L2 deployment
+Governance layer
+Risk parameter automation
 
-1. Open an issue
-2. Start a discussion
-3. Submit a pull request
+🎯 Why This Matters
 
-All contributions—technical or conceptual—are welcome.
+    FlatCoin is not just a stablecoin—
+
+    It’s a minimal, transparent implementation of collateralized debt systems, designed to explore:
+
+    1. Risk management in DeFi
+    2. Incentive-driven liquidation systems
+    3. Protocol-level safety guarantees
+
+👤 Author
+
+    Supravo Sarkar
+
+💭 Contributing
+
+    Have ideas or improvements?
+
+    1. Open an issue
+    2. Start a discussion
+    3. Submit a PR
+
+All contributions are welcome.
 
 📜 License
 
-MIT License
+    MIT License
 
 🧠 Final Note
-`This project isn’t just about building a stablecoin—
-it’s about understanding why systems fail, and how to design them not to.`
+
+    “Good DeFi systems don’t rely on trust—
+    they rely on constraints that cannot be broken.”

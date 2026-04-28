@@ -44,7 +44,7 @@ contract HelperConfig is Script {
                         NETWORK CONFIGS
     //////////////////////////////////////////////////////////////*/
 
-    function getSepoliaConfig() internal pure returns (NetworkConfig memory config) {
+    function getSepoliaConfig() internal view returns (NetworkConfig memory config) {
         address[] memory tokens = new address[](2);
         address[] memory feeds = new address[](2);
 
@@ -52,14 +52,14 @@ contract HelperConfig is Script {
         tokens[0] = 0xdd13E55209Fd76AfE204dBda4007C227904f0a81;
         feeds[0] = 0x694AA1769357215DE4FAC081bf1f309aDC325306;
 
-        // WBTC
-        tokens[1] = 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063; // example (can replace)
+        // WBTC (replace with correct testnet token if needed)
+        tokens[1] = 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063;
         feeds[1] = 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43;
 
         config = NetworkConfig({collateralTokens: tokens, priceFeeds: feeds, treasury: msg.sender});
     }
 
-    function getMainnetConfig() internal pure returns (NetworkConfig memory config) {
+    function getMainnetConfig() internal view returns (NetworkConfig memory config) {
         address[] memory tokens = new address[](2);
         address[] memory feeds = new address[](2);
 
@@ -74,6 +74,10 @@ contract HelperConfig is Script {
         config = NetworkConfig({collateralTokens: tokens, priceFeeds: feeds, treasury: msg.sender});
     }
 
+    /*//////////////////////////////////////////////////////////////
+                        ANVIL CONFIG (LOCAL)
+    //////////////////////////////////////////////////////////////*/
+
     function getOrCreateAnvilConfig() internal returns (NetworkConfig memory config) {
         if (s_activeConfig.collateralTokens.length > 0) {
             return s_activeConfig;
@@ -81,12 +85,17 @@ contract HelperConfig is Script {
 
         vm.startBroadcast();
 
-        // Deploy mocks
+        // Deploy mock price feeds
         MockV3Aggregator ethFeed = new MockV3Aggregator(DECIMALS, ETH_PRICE);
         MockV3Aggregator btcFeed = new MockV3Aggregator(DECIMALS, BTC_PRICE);
 
-        ERC20Mock weth = new ERC20Mock("Wrapped ETH", "WETH", msg.sender, 1000e18);
-        ERC20Mock wbtc = new ERC20Mock("Wrapped BTC", "WBTC", msg.sender, 1000e18);
+        // Deploy mock ERC20 tokens (OZ version has NO constructor args)
+        ERC20Mock weth = new ERC20Mock();
+        ERC20Mock wbtc = new ERC20Mock();
+
+        // Mint tokens to deployer
+        weth.mint(msg.sender, 1000e18);
+        wbtc.mint(msg.sender, 1000e18);
 
         vm.stopBroadcast();
 
@@ -100,6 +109,8 @@ contract HelperConfig is Script {
         feeds[1] = address(btcFeed);
 
         config = NetworkConfig({collateralTokens: tokens, priceFeeds: feeds, treasury: msg.sender});
+
+        s_activeConfig = config;
     }
 
     /*//////////////////////////////////////////////////////////////

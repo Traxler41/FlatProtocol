@@ -1,109 +1,238 @@
-//SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import {Test, console} from "forge-std/Test.sol";
-import {FlatCoin} from "../../src/FlatCoin.sol";
+import {Test} from "forge-std/Test.sol";
 import {FlatCoinEngine} from "../../src/FlatCoinEngine.sol";
+import {FlatCoin} from "../../src/FlatCoin.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
+import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {MockV3Aggregator} from "../../test/mock/MockV3Aggregator.sol";
 
-contract TestFlatCoinEngine is Test {
+contract FlatCoinEngineTest is Test {
+    FlatCoinEngine engine;
     FlatCoin flatCoin;
-    FlatCoinEngine flatCoinEngine;
-    HelperConfig helperConfig;
+    HelperConfig config;
+
+    address weth;
+    address wbtc;
     address priceFeed;
 
-    uint256 public constant INITIAL_BALANCE = 100 ether;
-    uint256 public constant FUND_AMOUNT = 5 ether;
-    uint256 public constant MINT_AMOUNT = 3000e18;
-    uint256 public constant BROKEN_MINT_AMOUNT = 10000 ether;
-    uint256 public constant LIQUIDATOR_FUND = 2 ether;
+    address USER = address(1);
+    address LIQUIDATOR = address(2);
 
-    address USER = makeAddr("user");
-    address LIQUIDATOR = makeAddr("liquidator");
+    uint256 constant STARTING_BALANCE = 1000e18;
+    uint256 constant DEPOSIT_AMOUNT = 100e18;
+    uint256 constant MINT_AMOUNT = 30000e18;
+
+    /*//////////////////////////////////////////////////////////////
+                                SETUP
+    //////////////////////////////////////////////////////////////*/
 
     function setUp() public {
+        config = new HelperConfig();
+        HelperConfig.NetworkConfig memory net = config.activeNetworkConfig();
+
         flatCoin = new FlatCoin();
-        helperConfig = new HelperConfig();
-        (, priceFeed) = helperConfig.activeNetworkConfig();
-        flatCoinEngine = new FlatCoinEngine(priceFeed, address(flatCoin));
+        engine = new FlatCoinEngine(address(flatCoin), address(this));
+        flatCoin.setEngine(address(engine));
 
-        vm.deal(USER, INITIAL_BALANCE);
-        vm.deal(LIQUIDATOR, INITIAL_BALANCE);
+        weth = net.collateralTokens[0];
+        wbtc = net.collateralTokens[1];
+        priceFeed = net.priceFeeds[0];
+
+        // Configure engine
+        engine.addCollateral(weth, net.priceFeeds[0], 80, 10);
+        engine.addCollateral(wbtc, net.priceFeeds[1], 75, 12);
+
+        // Fund users
+        ERC20Mock(weth).mint(USER, STARTING_BALANCE);
+        ERC20Mock(weth).mint(LIQUIDATOR, STARTING_BALANCE);
     }
 
-    function testCanStakeAssets() public {
-        vm.startPrank(USER);
-        flatCoinEngine.stakeCollateral{value: FUND_AMOUNT}();
-        vm.stopPrank();
+    /*//////////////////////////////////////////////////////////////
+                        DEPOSIT TESTS
+    //////////////////////////////////////////////////////////////*/
 
-        assertEq(flatCoinEngine.getCollateralStaked(USER), FUND_AMOUNT);
+    function testDepositCollateral() public {
+        vm.startPrank(USER);
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+
+        assertEq(engine.getCollateral(USER, weth), DEPOSIT_AMOUNT);
+
+        vm.stopPrank();
     }
 
-    function testCanStakeAssetsAndMint() public {
+    function testRevertIfDepositZero() public {
         vm.startPrank(USER);
-        flatCoinEngine.stakeCollateral{value: FUND_AMOUNT}();
-        flatCoinEngine.mintCoins(MINT_AMOUNT);
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+
+        vm.expectRevert();
+        engine.deposit(weth, 0);
+
         vm.stopPrank();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        MINT TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testMintFlatCoin() public {
+        vm.startPrank(USER);
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+
+        engine.mint(MINT_AMOUNT);
 
         assertEq(flatCoin.balanceOf(USER), MINT_AMOUNT);
+
+        vm.stopPrank();
     }
 
-    function testCannotMintExcessTokens() public {
+    function testRevertIfHealthFactorBrokenOnMint() public {
         vm.startPrank(USER);
-        flatCoinEngine.stakeCollateral{value: FUND_AMOUNT}();
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+
+        // Try to mint near max
+        uint256 unsafeMint = 160_000e18; // exceeds safe borrow
+
         vm.expectRevert();
-        flatCoinEngine.mintCoins(BROKEN_MINT_AMOUNT);
+        engine.mint(unsafeMint);
+
+        vm.stopPrank();
     }
 
-    function testHealthFactor() public {
-        vm.startPrank(USER);
-        flatCoinEngine.stakeCollateral{value: FUND_AMOUNT}();
-        flatCoinEngine.mintCoins(MINT_AMOUNT);
-        vm.stopPrank();
+    /*//////////////////////////////////////////////////////////////
+                        BURN TESTS
+    //////////////////////////////////////////////////////////////*/
 
-        console.log("HEALTH FACTOR=", flatCoinEngine.getHealthFactor(USER));
+    function testBurnReducesDebt() public {
+        vm.startPrank(USER);
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+
+        engine.mint(MINT_AMOUNT);
+
+        flatCoin.approve(address(engine), MINT_AMOUNT);
+        engine.burn(MINT_AMOUNT);
+
+        assertEq(flatCoin.balanceOf(USER), 0);
+
+        vm.stopPrank();
     }
 
-    function testCanLiquidate() public {
-        // 1. Setup: User deposits 5 ETH ($10k) and mints 3k FC 0.8) / 3,000 = 2.66 (Healthy)
-        vm.startPrank(USER);
-        flatCoinEngine.stakeCollateral{value: 5 ether}();
-        flatCoinEngine.mintCoins(3000 ether);
+    /*//////////////////////////////////////////////////////////////
+                        WITHDRAW TESTS
+    //////////////////////////////////////////////////////////////*/
 
-        // Give Liquidator enough tokens to pay half the debt
-        uint256 debtToCover = 1500 ether;
-        flatCoin.transfer(LIQUIDATOR, debtToCover);
+    function testWithdrawCollateral() public {
+        vm.startPrank(USER);
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+
+        engine.withdraw(weth, DEPOSIT_AMOUNT);
+
+        assertEq(engine.getCollateral(USER, weth), 0);
+
+        vm.stopPrank();
+    }
+
+    function testRevertWithdrawIfBreaksHealthFactor() public {
+        vm.startPrank(USER);
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+
+        engine.mint(MINT_AMOUNT);
+
+        vm.expectRevert();
+        engine.withdraw(weth, DEPOSIT_AMOUNT);
+
+        vm.stopPrank();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        HEALTH FACTOR
+    //////////////////////////////////////////////////////////////*/
+
+    function testHealthFactorImprovesWithMoreCollateral() public {
+        vm.startPrank(USER);
+
+        ERC20Mock(weth).approve(address(engine), 200e18);
+        engine.deposit(weth, 200e18);
+
+        engine.mint(MINT_AMOUNT);
+
+        uint256 hf = engine.getHealthFactor(USER);
+
+        assertGt(hf, 1e18);
+
+        vm.stopPrank();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        INTEREST TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testInterestAccrualIncreasesDebt() public {
+        vm.startPrank(USER);
+
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+
+        engine.mint(MINT_AMOUNT);
+
+        uint256 debtBefore = engine.getDebt(USER);
+
+        vm.warp(block.timestamp + 365 days);
+
+        // 🔥 Fix: refresh oracle so it's not stale
+        MockV3Aggregator(priceFeed).updateAnswer(2000e8);
+
+        engine.mint(1); // triggers accrue
+
+        uint256 debtAfter = engine.getDebt(USER);
+
+        assertGt(debtAfter, debtBefore);
+
+        vm.stopPrank();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        LIQUIDATION TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testLiquidationAfterPriceCrash() public {
+        // USER opens position
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(engine), DEPOSIT_AMOUNT);
+        engine.deposit(weth, DEPOSIT_AMOUNT);
+        engine.mint(MINT_AMOUNT);
         vm.stopPrank();
 
-        // 2. Price Crash: ETH drops to $700700 * 0.8) / 3,000 = 0.93 (Liquidatable!)
-        MockV3Aggregator(address(priceFeed)).updateAnswer(700e8);
+        // Simulate price crash
+        MockV3Aggregator(priceFeed).updateAnswer(500e8); // ETH drops from 2000 → 500
 
-        uint256 hfBefore = flatCoinEngine.getHealthFactor(USER);
-        console.log("Health Factor Before:", hfBefore);
-        assert(hfBefore < 1e18);
+        // Liquidator gets FC
+        vm.startPrank(USER);
+        flatCoin.transfer(LIQUIDATOR, MINT_AMOUNT);
+        vm.stopPrank();
 
-        // 3. Execution: Liquidator pays off 1,500 FC debt
         vm.startPrank(LIQUIDATOR);
-        flatCoin.approve(address(flatCoinEngine), debtToCover);
-        flatCoinEngine.liquidate(USER, debtToCover);
+        flatCoin.approve(address(engine), MINT_AMOUNT);
+
+        engine.liquidate(USER, weth, MINT_AMOUNT);
+
         vm.stopPrank();
 
-        // 4. Assertions
-        uint256 hfAfter = flatCoinEngine.getHealthFactor(USER);
-        console.log("Health Factor After:", hfAfter);
-
-        // Health Factor must have improved significantly
-        assert(hfAfter > hfBefore);
-
-        // User debt should be reduced
-        assertEq(flatCoinEngine.getMintedAmount(USER), 1500 ether);
-
-        // Liquidator should have earned ETH (Debt + 10% Bonus)
-        // 1500 USD / 700 = 2.14 ETH + 10% bonus = ~2.35 ETH
-        uint256 liquidatorCollateral = flatCoinEngine.getCollateralStaked(LIQUIDATOR);
-        assert(liquidatorCollateral > 0);
-        console.log("Liquidator earned ETH:", liquidatorCollateral);
+        uint256 userCollateral = engine.getCollateral(USER, weth);
+        assertLt(userCollateral, DEPOSIT_AMOUNT);
     }
 }
-
